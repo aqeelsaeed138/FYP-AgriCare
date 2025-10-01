@@ -1,13 +1,13 @@
-import { ApiErrors } from "../utils/ApiErrors.js"
+import { ApiError } from "../utils/ApiError.js"
 import {asyncHandler} from "../utils/asyncHandler.js"
 import {ApiResponse} from "../utils/ApiResponse.js"
 import jwt from "jsonwebtoken"
-import Farmer from "../models/farmer.models.js"
+import { Farmer } from "../models/farmer.model.js"
 
 const generateAccessAndRefreshToken = async (_id) => {
     const farmer = await Farmer.findById(_id)
     if (!farmer) {
-        throw new ApiErrors(500, "Error occur in generating tokens")
+        throw new ApiError(500, "Error occur in generating tokens")
     }
     const refreshToken = await farmer.generateRefreshToken()
     const accessToken = await farmer.generateAccessToken()
@@ -19,19 +19,19 @@ const generateAccessAndRefreshToken = async (_id) => {
 
 const registerFarmer = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required..")
+        throw new ApiError(400, "Request body is required..")
     }
 
     const {name, phone, email, location, marketplace} = req.body
 
     if (!name?.trim() || !phone?.trim()) {
-        throw new ApiErrors(400, "Name and phone are required to register new farmer")
+        throw new ApiError(400, "Name and phone are required to register new farmer")
     }
 
     const alreadyExistedFarmer = await Farmer.findOne({phone})
 
     if (alreadyExistedFarmer) {
-        throw new ApiErrors(400, "This Farmer is already registered. Please login")
+        throw new ApiError(400, "This Farmer is already registered. Please login")
     }
 
     const farmer = await Farmer.create({
@@ -45,30 +45,44 @@ const registerFarmer = asyncHandler(async (req, res) => {
     const createdFarmer = await Farmer.findById(farmer._id)
 
     if (!createdFarmer) {
-        throw new ApiErrors(500, "Farmer can't registered. Some internal server error occur")
+        throw new ApiError(500, "Farmer can't registered. Some internal server error occur")
     }
 
-    return res.status(201)
+    const { accessToken, refreshToken} = await generateAccessAndRefreshToken(createdFarmer._id)
+
+    const options = {
+        httpOnly: true,
+        secure: true
+    }
+
+    return res
+    .status(200)
+    .cookie("accessToken", accessToken, options)
+    .cookie("refreshToken", refreshToken, options)
     .json(
-        new ApiResponse(201, createdFarmer.getPublicProfile(), "Registered new Farmer")
+        new ApiResponse(200, {
+            farmer: createdFarmer.getPublicProfile(),
+            accessToken,
+            refreshToken
+        }, "Farmer Register and login successfully")
     )
 })
 
 const loginFarmer = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required..")
+        throw new ApiError(400, "Request body is required..")
     }
 
     const {phone} = req.body
 
     if (!phone?.trim()) {
-        throw new ApiErrors(400, "Phone number is required")
+        throw new ApiError(400, "Phone number is required")
     }
 
     const existedFarmer = await Farmer.findOne({phone})
 
     if (!existedFarmer) {
-        throw new ApiErrors(400, "This Farmer is not registered.. First register this farmer")
+        throw new ApiError(400, "This Farmer is not registered.. First register this farmer")
     }
 
     const { accessToken, refreshToken} = await generateAccessAndRefreshToken(existedFarmer._id)
@@ -118,16 +132,16 @@ const logoutFarmer = asyncHandler(async (req, res) => {
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const token = req.cookies?.refreshToken || req.params.refreshToken || "";
     if (token === "") {
-        throw new ApiErrors(400, "Error occurs in fetching refresh token from your request")
+        throw new ApiError(400, "Error occurs in fetching refresh token from your request")
     }
     const decodeToken = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET)
 
     const farmer = await Farmer.findById(decodeToken._id)
     if (!farmer) {
-        throw new ApiErrors(400, "Your refresh token is expired or invalid")
+        throw new ApiError(400, "Your refresh token is expired or invalid")
     }
     if (farmer.refreshToken !== token) {
-        throw new ApiErrors(400, "Your refresh token is used or expired")
+        throw new ApiError(400, "Your refresh token is used or expired")
     }
     const { accessToken, refreshToken} = await generateAccessAndRefreshToken(farmer._id)
     const options = {
@@ -145,7 +159,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
 const updateFarmerProfile = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required")
+        throw new ApiError(400, "Request body is required")
     }
 
     const {name, email, location} = req.body
@@ -156,14 +170,14 @@ const updateFarmerProfile = asyncHandler(async (req, res) => {
     if (location) updateData.location = location
 
     if (Object.keys(updateData).length === 0) {
-        throw new ApiErrors(400, "At least one field is required to update")
+        throw new ApiError(400, "At least one field is required to update")
     }
 
     // Check if email is being updated and already exists
     if (email) {
         const existingFarmer = await Farmer.findOne({ email })
         if (existingFarmer) {
-            throw new ApiErrors(400, "Email is already in use")
+            throw new ApiError(400, "Email is already in use")
         }
     }
 
@@ -174,7 +188,7 @@ const updateFarmerProfile = asyncHandler(async (req, res) => {
     )
 
     if (!updatedFarmer) {
-        throw new ApiErrors(500, "Failed to update farmer profile")
+        throw new ApiError(500, "Failed to update farmer profile")
     }
 
     return res.status(200)
@@ -187,7 +201,7 @@ const getFarmerProfile = asyncHandler(async (req, res) => {
     const farmer = await Farmer.findById(req.farmer._id)
     
     if (!farmer) {
-        throw new ApiErrors(404, "Farmer not found")
+        throw new ApiError(404, "Farmer not found")
     }
 
     return res.status(200)
@@ -198,7 +212,7 @@ const getFarmerProfile = asyncHandler(async (req, res) => {
 
 const updateMarketplace = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required")
+        throw new ApiError(400, "Request body is required")
     }
 
     const {isSeller, shopName, contactInfo} = req.body
@@ -227,7 +241,7 @@ const updateMarketplace = asyncHandler(async (req, res) => {
     )
 
     if (!updatedFarmer) {
-        throw new ApiErrors(500, "Failed to update marketplace settings")
+        throw new ApiError(500, "Failed to update marketplace settings")
     }
 
     return res.status(200)
@@ -238,26 +252,26 @@ const updateMarketplace = asyncHandler(async (req, res) => {
 
 const addProduct = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required")
+        throw new ApiError(400, "Request body is required")
     }
 
     const {name, category, price, description, images} = req.body
 
     if (!name?.trim() || !price) {
-        throw new ApiErrors(400, "Product name and price are required")
+        throw new ApiError(400, "Product name and price are required")
     }
 
     if (price <= 0) {
-        throw new ApiErrors(400, "Price must be greater than 0")
+        throw new ApiError(400, "Price must be greater than 0")
     }
 
     const farmer = await Farmer.findById(req.farmer._id)
     if (!farmer) {
-        throw new ApiErrors(404, "Farmer not found")
+        throw new ApiError(404, "Farmer not found")
     }
 
     if (!farmer.marketplace?.isSeller) {
-        throw new ApiErrors(400, "You need to enable seller mode first")
+        throw new ApiError(400, "You need to enable seller mode first")
     }
 
     const newProduct = {
@@ -281,24 +295,24 @@ const addProduct = asyncHandler(async (req, res) => {
 
 const updateProduct = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiErrors(400, "Request body is required")
+        throw new ApiError(400, "Request body is required")
     }
 
     const {productId} = req.params
     const {name, category, price, description, images} = req.body
 
     if (!productId) {
-        throw new ApiErrors(400, "Product ID is required")
+        throw new ApiError(400, "Product ID is required")
     }
 
     const farmer = await Farmer.findById(req.farmer._id)
     if (!farmer) {
-        throw new ApiErrors(404, "Farmer not found")
+        throw new ApiError(404, "Farmer not found")
     }
 
     const product = farmer.marketplace.products.id(productId)
     if (!product) {
-        throw new ApiErrors(404, "Product not found")
+        throw new ApiError(404, "Product not found")
     }
 
     if (name?.trim()) product.name = name
@@ -319,12 +333,12 @@ const deleteProduct = asyncHandler(async (req, res) => {
     const {productId} = req.params
 
     if (!productId) {
-        throw new ApiErrors(400, "Product ID is required")
+        throw new ApiError(400, "Product ID is required")
     }
 
     const farmer = await Farmer.findById(req.farmer._id)
     if (!farmer) {
-        throw new ApiErrors(404, "Farmer not found")
+        throw new ApiError(404, "Farmer not found")
     }
 
     const productIndex = farmer.marketplace.products.findIndex(
@@ -332,7 +346,7 @@ const deleteProduct = asyncHandler(async (req, res) => {
     )
 
     if (productIndex === -1) {
-        throw new ApiErrors(404, "Product not found")
+        throw new ApiError(404, "Product not found")
     }
 
     farmer.marketplace.products.splice(productIndex, 1)
@@ -344,10 +358,10 @@ const deleteProduct = asyncHandler(async (req, res) => {
     )
 })
 
-const getAllFarmerProducts = asyncHandler(async (req, res) => {
+const getFarmerProducts = asyncHandler(async (req, res) => {
     const farmer = await Farmer.findById(req.farmer._id)
     if (!farmer) {
-        throw new ApiErrors(404, "Farmer not found")
+        throw new ApiError(404, "Farmer not found")
     }
 
     const products = farmer.marketplace?.products || []
@@ -396,7 +410,7 @@ const getSellerProducts = asyncHandler(async (req, res) => {
     const {page = 1, limit = 10, category} = req.query
 
     if (!sellerId) {
-        throw new ApiErrors(400, "Seller ID is required")
+        throw new ApiError(400, "Seller ID is required")
     }
 
     const seller = await Farmer.findOne({
@@ -405,7 +419,7 @@ const getSellerProducts = asyncHandler(async (req, res) => {
     })
 
     if (!seller) {
-        throw new ApiErrors(404, "Seller not found")
+        throw new ApiError(404, "Seller not found")
     }
 
     let products = seller.marketplace?.products || []
@@ -444,7 +458,7 @@ export {
     addProduct,
     updateProduct,
     deleteProduct,
-    getAllFarmerProducts,
+    getFarmerProducts,
     getAllSellers,
     getSellerProducts,
 }

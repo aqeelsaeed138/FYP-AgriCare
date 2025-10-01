@@ -1,5 +1,4 @@
 import mongoose, { Schema } from "mongoose";
-import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 
 const farmerSchema = new Schema(
@@ -13,6 +12,7 @@ const farmerSchema = new Schema(
       type: String,
       required: true,
       unique: true,
+      trim: true
     },
     email: {
       type: String,
@@ -53,22 +53,6 @@ const farmerSchema = new Schema(
   },
   { timestamps: true }
 );
-
-farmerSchema.pre("save", async function (next) {
-  try {
-    if (!this.isModified("password")) {
-      return next();
-    }
-    this.password = await bcrypt.hash(this.password, 10);
-    next();
-  } catch (error) {
-    next(error);
-  }
-});
-
-farmerSchema.methods.isPasswordCorrect = async function (password) {
-  return bcrypt.compare(password, this.password);
-};
 
 farmerSchema.methods.getPublicProfile = function () {
   return {
@@ -116,6 +100,6 @@ farmerSchema.methods.generateAccessToken = function () {
   );
 };
 
-const Farmer = mongoose.model("Farmer", farmerSchema);
+export const Farmer = mongoose.model("Farmer", farmerSchema);
 
-export default Farmer;
+

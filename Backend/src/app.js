@@ -18,4 +18,9 @@ app.use(cookieParser());
 app.use(express.static('public'));
 
 
+import farmerRouter from "./routes/farmer.routes.js"
+
+app.use("/api/v1/farmers", farmerRouter)
+
+
 export { app }

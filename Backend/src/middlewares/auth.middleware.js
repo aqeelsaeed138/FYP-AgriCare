@@ -1,0 +1,27 @@
+import { Farmer } from "../models/farmer.model.js";
+import { ApiError } from "../utils/ApiError.js";
+import { asyncHandler } from "../utils/asyncHandler.js";
+import jwt from "jsonwebtoken"
+
+
+const verifyFarmerJWT = asyncHandler(async (req, _, next) => {
+    try {
+        const token = req.cookies?.accessToken || req.header("Authorization")?.replace("Bearer ", "")
+        if (!token) {
+            throw new ApiError(401, "Unauthorized request")
+        }
+    
+        const decodeToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET)
+    
+        const farmer = await Farmer.findById(decodeToken._id)
+        if (!farmer) {
+            throw new ApiError(400, "Invalid access token")
+        }
+        req.farmer = farmer
+        next()
+    } catch (error) {
+        throw new ApiError(400, error?.message || "Unauthorized request", error)
+    }
+})
+
+export { verifyFarmerJWT }
