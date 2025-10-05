@@ -41,6 +41,10 @@ const farmerSchema = new Schema(
       },
       products: [
         {
+          _id: {
+            type: mongoose.Schema.Types.ObjectId,
+            auto: true
+          },
           name: { type: String, required: true },
           category: { type: String },
           price: { type: Number, required: true },

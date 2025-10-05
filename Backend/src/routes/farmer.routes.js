@@ -38,8 +38,8 @@ farmerRouter.route("/deleteProduct/:productId").delete(verifyFarmerJWT, deletePr
 farmerRouter.route("/getFarmerProducts").get(verifyFarmerJWT, getFarmerProducts)
 
 // Public Routes (No Authentication Required)
-farmerRouter.route("/getAllSellers").get(getAllSellers)
-farmerRouter.route("/getSellerProducts/:sellerId").get(getSellerProducts)
+farmerRouter.route("/getAllSellers").get(verifyFarmerJWT, getAllSellers)
+farmerRouter.route("/getSellerProducts").get(verifyFarmerJWT, getSellerProducts)
 
 
 export default farmerRouter

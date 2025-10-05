@@ -164,6 +164,7 @@ const updateFarmerProfile = asyncHandler(async (req, res) => {
 
     const {name, email, location} = req.body
     const updateData = {}
+    const farmerId = req.farmer?._id;
 
     if (name?.trim()) updateData.name = name
     if (email?.trim()) updateData.email = email
@@ -175,14 +176,14 @@ const updateFarmerProfile = asyncHandler(async (req, res) => {
 
     // Check if email is being updated and already exists
     if (email) {
-        const existingFarmer = await Farmer.findOne({ email })
+        const existingFarmer = await Farmer.findOne({ email, _id: {$ne: farmerId} })
         if (existingFarmer) {
             throw new ApiError(400, "Email is already in use")
         }
     }
 
     const updatedFarmer = await Farmer.findByIdAndUpdate(
-        req.farmer._id,
+        farmerId,
         updateData,
         { new: true }
     )
@@ -273,6 +274,13 @@ const addProduct = asyncHandler(async (req, res) => {
     if (!farmer.marketplace?.isSeller) {
         throw new ApiError(400, "You need to enable seller mode first")
     }
+    const productExists = farmer.marketplace.products.some(
+        product => product.name.toLowerCase().trim() === name.toLowerCase().trim()
+    )
+
+    if (productExists) {
+        throw new ApiError(400, "A product with this name already exists in your shop")
+    }
 
     const newProduct = {
         name,
@@ -310,7 +318,7 @@ const updateProduct = asyncHandler(async (req, res) => {
         throw new ApiError(404, "Farmer not found")
     }
 
-    const product = farmer.marketplace.products.id(productId)
+    const product = farmer.marketplace.products._id(productId)
     if (!product) {
         throw new ApiError(404, "Product not found")
     }
@@ -373,17 +381,10 @@ const getFarmerProducts = asyncHandler(async (req, res) => {
 })
 
 const getAllSellers = asyncHandler(async (req, res) => {
-    const {page = 1, limit = 10, search = ""} = req.query
+    const {page = 1, limit = 10} = req.query
 
     const query = {
         "marketplace.isSeller": true
-    }
-
-    if (search) {
-        query.$or = [
-            { name: { $regex: search, $options: "i" } },
-            { "marketplace.shopName": { $regex: search, $options: "i" } }
-        ]
     }
 
     const sellers = await Farmer.find(query)
@@ -406,30 +407,28 @@ const getAllSellers = asyncHandler(async (req, res) => {
 })
 
 const getSellerProducts = asyncHandler(async (req, res) => {
-    const {sellerId} = req.params
     const {page = 1, limit = 10, category} = req.query
 
-    if (!sellerId) {
-        throw new ApiError(400, "Seller ID is required")
-    }
-
+    // Use authenticated farmer's ID
     const seller = await Farmer.findOne({
-        _id: sellerId,
+        _id: req.farmer._id,
         "marketplace.isSeller": true
     })
 
     if (!seller) {
-        throw new ApiError(404, "Seller not found")
+        throw new ApiError(404, "Seller not found or seller mode is not enabled")
     }
 
     let products = seller.marketplace?.products || []
 
+    // Filter by category if provided
     if (category) {
         products = products.filter(product => 
             product.category?.toLowerCase().includes(category.toLowerCase())
         )
     }
 
+    // Pagination
     const startIndex = (page - 1) * limit
     const endIndex = startIndex + parseInt(limit)
     const paginatedProducts = products.slice(startIndex, endIndex)
@@ -439,9 +438,14 @@ const getSellerProducts = asyncHandler(async (req, res) => {
         new ApiResponse(200, {
             seller: seller.getPublicProfile(),
             products: paginatedProducts,
-            totalPages: Math.ceil(products.length / limit),
-            currentPage: parseInt(page),
-            total: products.length
+            pagination: {
+                totalProducts: products.length,
+                totalPages: Math.ceil(products.length / limit),
+                currentPage: parseInt(page),
+                limit: parseInt(limit),
+                hasNextPage: endIndex < products.length,
+                hasPrevPage: page > 1
+            }
         }, "Seller products fetched successfully")
     )
 })
