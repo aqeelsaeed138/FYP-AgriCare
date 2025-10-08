@@ -1,7 +1,4 @@
-
-// ============================================
-// 2. WEATHER DATA COLLECTION
-// ============================================
+import mongoose, { Schema } from "mongoose";
 
 const weatherDataSchema = new Schema({
   // Location

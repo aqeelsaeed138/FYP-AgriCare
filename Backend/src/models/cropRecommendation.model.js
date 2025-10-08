@@ -1,6 +1,4 @@
-// ============================================
-// 3. CROP RECOMMENDATIONS COLLECTION
-// ============================================
+import mongoose, { Schema } from "mongoose";
 
 const cropRecommendationSchema = new Schema({
  
@@ -24,17 +22,7 @@ const cropRecommendationSchema = new Schema({
   },
   
   location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-      default: 'Point'
-    },
-    coordinates: {
-      type: [Number], // [longitude, latitude]
-      index: '2dsphere'
-    },
-    city: String,
-    province: String
+   type: String
   },
   
   season: {
