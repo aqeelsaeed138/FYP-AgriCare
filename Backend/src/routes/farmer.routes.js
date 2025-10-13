@@ -1,7 +1,9 @@
 import { Router } from "express"
 import {
-    registerFarmer, 
-    loginFarmer, 
+    requestRegistrationOTP,
+    verifyOTPAndRegister,
+    requestLoginOTP,
+    verifyOTPAndLogin,
     logoutFarmer, 
     refreshAccessToken, 
     updateFarmerProfile,
@@ -18,9 +20,11 @@ import { verifyFarmerJWT } from "../middlewares/auth.middleware.js"
 
 const farmerRouter = Router()
 
-// Authentication Routes
-farmerRouter.route("/registerFarmer").post(registerFarmer)
-farmerRouter.route("/loginFarmer").post(loginFarmer)
+// Authentication Routes - OTP Based
+farmerRouter.route("/request-registration-otp").post(requestRegistrationOTP)
+farmerRouter.route("/verify-otp-register").post(verifyOTPAndRegister)
+farmerRouter.route("/request-login-otp").post(requestLoginOTP)
+farmerRouter.route("/verify-otp-login").post(verifyOTPAndLogin)
 farmerRouter.route("/logoutFarmer").post(verifyFarmerJWT, logoutFarmer)
 farmerRouter.route("/refreshAccessToken").post(refreshAccessToken)
 

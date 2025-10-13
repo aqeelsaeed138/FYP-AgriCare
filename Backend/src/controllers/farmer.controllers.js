@@ -3,6 +3,8 @@ import {asyncHandler} from "../utils/asyncHandler.js"
 import {ApiResponse} from "../utils/ApiResponse.js"
 import jwt from "jsonwebtoken"
 import { Farmer } from "../models/farmer.model.js"
+import nodemailer from "nodemailer"
+import Twilio from "twilio/lib/rest/Twilio.js"
 
 const generateAccessAndRefreshToken = async (_id) => {
     const farmer = await Farmer.findById(_id)
@@ -16,97 +18,328 @@ const generateAccessAndRefreshToken = async (_id) => {
 
     return { accessToken, refreshToken }
 }
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD
+    }
+});
 
-const registerFarmer = asyncHandler(async (req, res) => {
+// Store OTPs temporarily (in production, use Redis or similar)
+const otpStore = new Map();
+
+// Generate 4-digit OTP
+const generateOTP = () => {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
+// Send OTP via SMS (integrate with SMS provider like Twilio, MSG91, etc.)
+const sendSMSOTP = async (phone, otp) => {
+    try {
+        const accountSid = process.env.TWILIO_ACCOUNT_SID;
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        const client = Twilio(accountSid, authToken);
+        
+        const message = await client.messages.create({
+            body: `Your AgriCare verification code is: ${otp}. Valid for 10 minutes.`,
+            from: process.env.TWILIO_PHONE_NUMBER,
+            to: phone // Format: +923001234567
+        });
+        
+        console.log(`SMS sent successfully. SID: ${message.sid}`);
+        return true;
+    } catch (error) {
+        console.error('Twilio SMS Error:', error);
+        throw new Error('Failed to send SMS');
+    }
+};
+
+// Send OTP via Email
+const sendEmailOTP = async (email, otp) => {
+    const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: 'AgriCare - Email Verification Code',
+        html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px;">
+                <h2>AgriCare Email Verification</h2>
+                <p>Your verification code is:</p>
+                <h1 style="color: #4CAF50; letter-spacing: 5px;">${otp}</h1>
+                <p>This code will expire in 10 minutes.</p>
+                <p>If you didn't request this code, please ignore this email.</p>
+            </div>
+        `
+    };
+
+    await transporter.sendMail(mailOptions);
+    return true;
+};
+
+// Step 1: Request OTP for Registration
+const requestRegistrationOTP = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiError(400, "Request body is required..")
+        throw new ApiError(400, "Request body is required");
     }
 
-    const {name, phone, email, location, marketplace} = req.body
+    const { name, phone, email, location, marketplace } = req.body;
 
-    if (!name?.trim() || !phone?.trim()) {
-        throw new ApiError(400, "Name and phone are required to register new farmer")
+    if (!name?.trim()) {
+        throw new ApiError(400, "Name is required");
     }
 
-    const alreadyExistedFarmer = await Farmer.findOne({phone})
-
-    if (alreadyExistedFarmer) {
-        throw new ApiError(400, "This Farmer is already registered. Please login")
+    if (!phone?.trim() && !email?.trim()) {
+        throw new ApiError(400, "Either phone number or email is required");
     }
+
+    // Check if farmer already exists
+    let existingFarmer;
+    if (phone) {
+        existingFarmer = await Farmer.findOne({ phone });
+    } else if (email) {
+        existingFarmer = await Farmer.findOne({ email });
+    }
+
+    if (existingFarmer) {
+        throw new ApiError(400, "This farmer is already registered. Please login");
+    }
+
+    // Generate OTP
+    const otp = generateOTP();
+    const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // Store OTP with user data
+    const identifier = phone || email;
+    otpStore.set(identifier, {
+        otp,
+        otpExpiry,
+        userData: { name, phone, email, location, marketplace },
+        type: 'registration'
+    });
+
+    // Send OTP
+    try {
+        if (phone) {
+            await sendSMSOTP(phone, otp);
+        } else {
+            await sendEmailOTP(email, otp);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, {
+                identifier,
+                message: phone 
+                    ? "OTP sent to your phone number" 
+                    : "OTP sent to your email"
+            }, "OTP sent successfully")
+        );
+    } catch (error) {
+        otpStore.delete(identifier);
+        throw new ApiError(500, "Failed to send OTP. Please try again");
+    }
+});
+
+// Step 2: Verify OTP and Complete Registration
+const verifyOTPAndRegister = asyncHandler(async (req, res) => {
+    if (!req.body) {
+        throw new ApiError(400, "Request body is required");
+    }
+
+    const { identifier, otp } = req.body;
+
+    if (!identifier?.trim() || !otp?.trim()) {
+        throw new ApiError(400, "Identifier and OTP are required");
+    }
+
+    // Retrieve stored OTP data
+    const storedData = otpStore.get(identifier);
+
+    if (!storedData) {
+        throw new ApiError(400, "OTP expired or invalid. Please request a new OTP");
+    }
+
+    // Check if OTP is expired
+    if (Date.now() > storedData.otpExpiry) {
+        otpStore.delete(identifier);
+        throw new ApiError(400, "OTP has expired. Please request a new OTP");
+    }
+
+    // Verify OTP
+    if (storedData.otp !== otp) {
+        throw new ApiError(400, "Invalid OTP. Please try again");
+    }
+
+    // Check type
+    if (storedData.type !== 'registration') {
+        throw new ApiError(400, "Invalid OTP type");
+    }
+
+    // Create farmer
+    const { name, phone, email, location, marketplace } = storedData.userData;
 
     const farmer = await Farmer.create({
         name,
         phone,
         email,
         location,
-        marketplace
-    })
+        marketplace,
+        isVerified: true
+    });
 
-    const createdFarmer = await Farmer.findById(farmer._id)
+    const createdFarmer = await Farmer.findById(farmer._id);
 
     if (!createdFarmer) {
-        throw new ApiError(500, "Farmer can't registered. Some internal server error occur")
+        throw new ApiError(500, "Farmer registration failed. Please try again");
     }
 
-    const { accessToken, refreshToken} = await generateAccessAndRefreshToken(createdFarmer._id)
+    // Generate tokens
+    const { accessToken, refreshToken } = await generateAccessAndRefreshToken(createdFarmer._id);
 
     const options = {
         httpOnly: true,
         secure: true
-    }
+    };
+
+    // Clear OTP from store
+    otpStore.delete(identifier);
 
     return res
-    .status(200)
-    .cookie("accessToken", accessToken, options)
-    .cookie("refreshToken", refreshToken, options)
-    .json(
-        new ApiResponse(200, {
-            farmer: createdFarmer.getPublicProfile(),
-            accessToken,
-            refreshToken
-        }, "Farmer Register and login successfully")
-    )
-})
+        .status(201)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(201, {
+                farmer: createdFarmer.getPublicProfile(),
+                accessToken,
+                refreshToken
+            }, "Farmer registered and logged in successfully")
+        );
+});
 
-const loginFarmer = asyncHandler(async (req, res) => {
+// Step 1: Request OTP for Login
+const requestLoginOTP = asyncHandler(async (req, res) => {
     if (!req.body) {
-        throw new ApiError(400, "Request body is required..")
+        throw new ApiError(400, "Request body is required");
     }
 
-    const {phone} = req.body
+    const { identifier } = req.body; // Can be phone or email
 
-    if (!phone?.trim()) {
-        throw new ApiError(400, "Phone number is required")
+    if (!identifier?.trim()) {
+        throw new ApiError(400, "Phone number or email is required");
     }
 
-    const existedFarmer = await Farmer.findOne({phone})
+    // Find farmer by phone or email
+    const existedFarmer = await Farmer.findOne({
+        $or: [{ phone: identifier }, { email: identifier }]
+    });
 
     if (!existedFarmer) {
-        throw new ApiError(400, "This Farmer is not registered.. First register this farmer")
+        throw new ApiError(400, "Farmer not found. Please register first");
     }
 
-    const { accessToken, refreshToken} = await generateAccessAndRefreshToken(existedFarmer._id)
+    // Generate OTP
+    const otp = generateOTP();
+    const otpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    // Store OTP
+    otpStore.set(identifier, {
+        otp,
+        otpExpiry,
+        farmerId: existedFarmer._id,
+        type: 'login'
+    });
+
+    // Send OTP
+    try {
+        if (existedFarmer.phone === identifier) {
+            await sendSMSOTP(identifier, otp);
+        } else {
+            await sendEmailOTP(identifier, otp);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, {
+                identifier,
+                message: existedFarmer.phone === identifier
+                    ? "OTP sent to your phone number"
+                    : "OTP sent to your email"
+            }, "OTP sent successfully")
+        );
+    } catch (error) {
+        otpStore.delete(identifier);
+        throw new ApiError(500, "Failed to send OTP. Please try again");
+    }
+});
+
+// Step 2: Verify OTP and Login
+const verifyOTPAndLogin = asyncHandler(async (req, res) => {
+    if (!req.body) {
+        throw new ApiError(400, "Request body is required");
+    }
+
+    const { identifier, otp } = req.body;
+
+    if (!identifier?.trim() || !otp?.trim()) {
+        throw new ApiError(400, "Identifier and OTP are required");
+    }
+
+    // Retrieve stored OTP data
+    const storedData = otpStore.get(identifier);
+
+    if (!storedData) {
+        throw new ApiError(400, "OTP expired or invalid. Please request a new OTP");
+    }
+
+    // Check if OTP is expired
+    if (Date.now() > storedData.otpExpiry) {
+        otpStore.delete(identifier);
+        throw new ApiError(400, "OTP has expired. Please request a new OTP");
+    }
+
+    // Verify OTP
+    if (storedData.otp !== otp) {
+        throw new ApiError(400, "Invalid OTP. Please try again");
+    }
+
+    // Check type
+    if (storedData.type !== 'login') {
+        throw new ApiError(400, "Invalid OTP type");
+    }
+
+    // Get farmer
+    const existedFarmer = await Farmer.findById(storedData.farmerId);
+
+    if (!existedFarmer) {
+        throw new ApiError(400, "Farmer not found");
+    }
+
+    // Generate tokens
+    const { accessToken, refreshToken } = await generateAccessAndRefreshToken(existedFarmer._id);
 
     const options = {
         httpOnly: true,
         secure: true
-    }
+    };
+
+    // Clear OTP from store
+    otpStore.delete(identifier);
 
     return res
-    .status(200)
-    .cookie("accessToken", accessToken, options)
-    .cookie("refreshToken", refreshToken, options)
-    .json(
-        new ApiResponse(200, {
-            farmer: existedFarmer.getPublicProfile(),
-            accessToken,
-            refreshToken
-        }, "Farmer login successfully")
-    )
-})
+        .status(200)
+        .cookie("accessToken", accessToken, options)
+        .cookie("refreshToken", refreshToken, options)
+        .json(
+            new ApiResponse(200, {
+                farmer: existedFarmer.getPublicProfile(),
+                accessToken,
+                refreshToken
+            }, "Farmer logged in successfully")
+        );
+});
 
 const logoutFarmer = asyncHandler(async (req, res) => {
-    await Farmer.findByIdAndUpdate(req.farmer?._id,
+    await Farmer.findByIdAndUpdate(
+        req.farmer?._id,
         {
             $set: {
                 refreshToken: undefined
@@ -115,19 +348,133 @@ const logoutFarmer = asyncHandler(async (req, res) => {
         {
             new: true
         }
-    )
+    );
 
     const options = {
         httpOnly: true,
         secure: true
-    }
-    return res.status(200)
-    .clearCookie("accessToken", options)
-    .clearCookie("refreshToken", options)
-    .json(
-        new ApiResponse(200, {}, "Farmer logout successfully")
-    )
-})
+    };
+
+    return res
+        .status(200)
+        .clearCookie("accessToken", options)
+        .clearCookie("refreshToken", options)
+        .json(
+            new ApiResponse(200, {}, "Farmer logged out successfully")
+        );
+});
+
+// const registerFarmer = asyncHandler(async (req, res) => {
+//     if (!req.body) {
+//         throw new ApiError(400, "Request body is required..")
+//     }
+
+//     const {name, phone, email, location, marketplace} = req.body
+
+//     if (!name?.trim() || !phone?.trim()) {
+//         throw new ApiError(400, "Name and phone are required to register new farmer")
+//     }
+
+//     const alreadyExistedFarmer = await Farmer.findOne({phone})
+
+//     if (alreadyExistedFarmer) {
+//         throw new ApiError(400, "This Farmer is already registered. Please login")
+//     }
+
+//     const farmer = await Farmer.create({
+//         name,
+//         phone,
+//         email,
+//         location,
+//         marketplace
+//     })
+
+//     const createdFarmer = await Farmer.findById(farmer._id)
+
+//     if (!createdFarmer) {
+//         throw new ApiError(500, "Farmer can't registered. Some internal server error occur")
+//     }
+
+//     const { accessToken, refreshToken} = await generateAccessAndRefreshToken(createdFarmer._id)
+
+//     const options = {
+//         httpOnly: true,
+//         secure: true
+//     }
+
+//     return res
+//     .status(200)
+//     .cookie("accessToken", accessToken, options)
+//     .cookie("refreshToken", refreshToken, options)
+//     .json(
+//         new ApiResponse(200, {
+//             farmer: createdFarmer.getPublicProfile(),
+//             accessToken,
+//             refreshToken
+//         }, "Farmer Register and login successfully")
+//     )
+// })
+
+// const loginFarmer = asyncHandler(async (req, res) => {
+//     if (!req.body) {
+//         throw new ApiError(400, "Request body is required..")
+//     }
+
+//     const {phone} = req.body
+
+//     if (!phone?.trim()) {
+//         throw new ApiError(400, "Phone number is required")
+//     }
+
+//     const existedFarmer = await Farmer.findOne({phone})
+
+//     if (!existedFarmer) {
+//         throw new ApiError(400, "This Farmer is not registered.. First register this farmer")
+//     }
+
+//     const { accessToken, refreshToken} = await generateAccessAndRefreshToken(existedFarmer._id)
+
+//     const options = {
+//         httpOnly: true,
+//         secure: true
+//     }
+
+//     return res
+//     .status(200)
+//     .cookie("accessToken", accessToken, options)
+//     .cookie("refreshToken", refreshToken, options)
+//     .json(
+//         new ApiResponse(200, {
+//             farmer: existedFarmer.getPublicProfile(),
+//             accessToken,
+//             refreshToken
+//         }, "Farmer login successfully")
+//     )
+// })
+
+// const logoutFarmer = asyncHandler(async (req, res) => {
+//     await Farmer.findByIdAndUpdate(req.farmer?._id,
+//         {
+//             $set: {
+//                 refreshToken: undefined
+//             }
+//         },
+//         {
+//             new: true
+//         }
+//     )
+
+//     const options = {
+//         httpOnly: true,
+//         secure: true
+//     }
+//     return res.status(200)
+//     .clearCookie("accessToken", options)
+//     .clearCookie("refreshToken", options)
+//     .json(
+//         new ApiResponse(200, {}, "Farmer logout successfully")
+//     )
+// })
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const token = req.cookies?.refreshToken || req.params.refreshToken || "";
@@ -452,9 +799,11 @@ const getSellerProducts = asyncHandler(async (req, res) => {
 
 
 export { 
-    registerFarmer, 
-    loginFarmer, 
-    logoutFarmer, 
+    requestRegistrationOTP,
+    verifyOTPAndRegister,
+    requestLoginOTP,
+    verifyOTPAndLogin,
+    logoutFarmer,
     refreshAccessToken, 
     updateFarmerProfile,
     getFarmerProfile,
